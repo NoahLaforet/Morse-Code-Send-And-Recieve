@@ -5,7 +5,7 @@ import time
 import sys
 
 # LED Configuration
-LED_PIN = 18  # GPIO pin number 
+LED_PIN = 17  # GPIO pin number 
 
 # Morse code timing (in seconds)
 DOT = 0.2              # Duration of a dot
