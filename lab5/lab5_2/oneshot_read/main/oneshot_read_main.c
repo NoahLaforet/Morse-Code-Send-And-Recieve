@@ -1,11 +1,11 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: Apache-2.0
+ * Morse Code Receiver using ADC and Photodiode
+ * Receives Morse code transmitted via LED and decodes to text
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "soc/soc_caps.h"
@@ -13,40 +13,102 @@
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
+#include "esp_timer.h"
 
-const static char *TAG = "EXAMPLE";
+const static char *TAG = "MORSE_RECEIVER";
 
 /*---------------------------------------------------------------
-        ADC General Macros
+        ADC Configuration for Photodiode
 ---------------------------------------------------------------*/
-//ADC1 Channels
+// ADC1 Channel 2 (GPIO2) - Photodiode input
 #if CONFIG_IDF_TARGET_ESP32
-#define EXAMPLE_ADC1_CHAN0          ADC_CHANNEL_4
-#define EXAMPLE_ADC1_CHAN1          ADC_CHANNEL_5
+#define PHOTODIODE_ADC_CHAN         ADC_CHANNEL_4
 #else
-#define EXAMPLE_ADC1_CHAN0          ADC_CHANNEL_2
-#define EXAMPLE_ADC1_CHAN1          ADC_CHANNEL_3
+#define PHOTODIODE_ADC_CHAN         ADC_CHANNEL_2  // ESP32C3: GPIO2
 #endif
 
-#if (SOC_ADC_PERIPH_NUM >= 2) && !CONFIG_IDF_TARGET_ESP32C3
-/**
- * On ESP32C3, ADC2 is no longer supported, due to its HW limitation.
- * Search for errata on espressif website for more details.
- */
-#define EXAMPLE_USE_ADC2            1
-#endif
+#define EXAMPLE_ADC_ATTEN           ADC_ATTEN_DB_12  // 0-3.3V range
 
-#if EXAMPLE_USE_ADC2
-//ADC2 Channels
-#define EXAMPLE_ADC2_CHAN0          ADC_CHANNEL_0
-#endif  //#if EXAMPLE_USE_ADC2
+// Single variables for photodiode reading
+static int adc_raw_value;
+static int voltage_mv;
 
-#define EXAMPLE_ADC_ATTEN           ADC_ATTEN_DB_12
+/*---------------------------------------------------------------
+        Morse Code Configuration
+---------------------------------------------------------------*/
+#define SAMPLE_RATE_MS      10      // Sample ADC every 10ms
+#define LIGHT_THRESHOLD     1500    // ADC raw value threshold (adjust based on testing)
 
-static int adc_raw[2][10];
-static int voltage[2][10];
+// Morse timing (in milliseconds) - synced with send.py
+#define DOT_DURATION_MS     200     // Dot duration (matches send.py: 0.2s)
+#define DASH_MIN_MS         400     // Minimum duration for dash (2x dot, send.py uses 3x=600ms)
+#define SYMBOL_GAP_MS       200     // Gap between dots/dashes (matches send.py)
+#define LETTER_GAP_MS       600     // Gap between letters (matches send.py: 3*DOT)
+#define WORD_GAP_MS         1400    // Gap between words (matches send.py: 7*DOT)
+
+// Morse code lookup table
+typedef struct {
+    char letter;
+    const char* code;
+} morse_t;
+
+const morse_t morse_table[] = {
+    {'A', ".-"},    {'B', "-..."},  {'C', "-.-."},  {'D', "-.."},
+    {'E', "."},     {'F', "..-."},  {'G', "--."},   {'H', "...."},
+    {'I', ".."},    {'J', ".---"},  {'K', "-.-"},   {'L', ".-.."},
+    {'M', "--"},    {'N', "-."},    {'O', "---"},   {'P', ".--."},
+    {'Q', "--.-"},  {'R', ".-."},   {'S', "..."},   {'T', "-"},
+    {'U', "..-"},   {'V', "...-"},  {'W', ".--"},   {'X', "-..-"},
+    {'Y', "-.--"},  {'Z', "--.."},
+    {'0', "-----"}, {'1', ".----"}, {'2', "..---"}, {'3', "...--"},
+    {'4', "....-"}, {'5', "....."}, {'6', "-...."}, {'7', "--..."},
+    {'8', "---.."}, {'9', "----."},
+    {'\0', ""}  // End marker
+};
+
+// State machine variables
+static bool current_light_state = false;
+static bool previous_light_state = false;
+static int64_t pulse_start_time = 0;
+static int64_t gap_start_time = 0;
+static char morse_buffer[10] = {0};  // Store dots/dashes for current letter
+static int buffer_index = 0;
 static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle);
 static void example_adc_calibration_deinit(adc_cali_handle_t handle);
+
+/*---------------------------------------------------------------
+        Morse Code Decoding Function
+---------------------------------------------------------------*/
+char decode_morse(const char* pattern) {
+    if (pattern == NULL || pattern[0] == '\0') {
+        return '\0';  // Empty pattern
+    }
+
+    // Search through morse table
+    for (int i = 0; morse_table[i].letter != '\0'; i++) {
+        if (strcmp(pattern, morse_table[i].code) == 0) {
+            return morse_table[i].letter;
+        }
+    }
+
+    return '?';  // Unknown pattern
+}
+
+void process_morse_buffer(void) {
+    if (buffer_index > 0) {
+        morse_buffer[buffer_index] = '\0';  // Null terminate
+        char decoded = decode_morse(morse_buffer);
+
+        if (decoded != '\0') {
+            printf("%c", decoded);
+            fflush(stdout);  // Immediately print the character
+        }
+
+        // Clear buffer
+        buffer_index = 0;
+        memset(morse_buffer, 0, sizeof(morse_buffer));
+    }
+}
 
 void app_main(void)
 {
@@ -62,75 +124,93 @@ void app_main(void)
         .atten = EXAMPLE_ADC_ATTEN,
         .bitwidth = ADC_BITWIDTH_DEFAULT,
     };
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, EXAMPLE_ADC1_CHAN0, &config));
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, EXAMPLE_ADC1_CHAN1, &config));
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, PHOTODIODE_ADC_CHAN, &config));
 
     //-------------ADC1 Calibration Init---------------//
-    adc_cali_handle_t adc1_cali_chan0_handle = NULL;
-    adc_cali_handle_t adc1_cali_chan1_handle = NULL;
-    bool do_calibration1_chan0 = example_adc_calibration_init(ADC_UNIT_1, EXAMPLE_ADC1_CHAN0, EXAMPLE_ADC_ATTEN, &adc1_cali_chan0_handle);
-    bool do_calibration1_chan1 = example_adc_calibration_init(ADC_UNIT_1, EXAMPLE_ADC1_CHAN1, EXAMPLE_ADC_ATTEN, &adc1_cali_chan1_handle);
+    adc_cali_handle_t adc1_cali_handle = NULL;
+    bool do_calibration = example_adc_calibration_init(ADC_UNIT_1, PHOTODIODE_ADC_CHAN, EXAMPLE_ADC_ATTEN, &adc1_cali_handle);
 
-#if EXAMPLE_USE_ADC2
-    //-------------ADC2 Init---------------//
-    adc_oneshot_unit_handle_t adc2_handle;
-    adc_oneshot_unit_init_cfg_t init_config2 = {
-        .unit_id = ADC_UNIT_2,
-        .ulp_mode = ADC_ULP_MODE_DISABLE,
-    };
-    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config2, &adc2_handle));
+    ESP_LOGI(TAG, "Morse Code Receiver Ready - Waiting for signal on GPIO2...");
+    ESP_LOGI(TAG, "Light threshold: %d (raw ADC value)", LIGHT_THRESHOLD);
 
-    //-------------ADC2 Calibration Init---------------//
-    adc_cali_handle_t adc2_cali_handle = NULL;
-    bool do_calibration2 = example_adc_calibration_init(ADC_UNIT_2, EXAMPLE_ADC2_CHAN0, EXAMPLE_ADC_ATTEN, &adc2_cali_handle);
+    // Initialize timing
+    gap_start_time = esp_timer_get_time() / 1000;  // Convert to ms
 
-    //-------------ADC2 Config---------------//
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc2_handle, EXAMPLE_ADC2_CHAN0, &config));
-#endif  //#if EXAMPLE_USE_ADC2
+    // Debug: print ADC values continuously to help calibrate threshold
+    int64_t start_time = esp_timer_get_time() / 1000;
 
+    ESP_LOGI(TAG, "");
+    ESP_LOGI(TAG, "=== CONTINUOUS DEBUG MODE ===");
+    ESP_LOGI(TAG, "Shine a flashlight or LED at the photodiode");
+    ESP_LOGI(TAG, "Watch for ADC values to change");
+    ESP_LOGI(TAG, "================================");
+    ESP_LOGI(TAG, "");
+
+    // Main loop - Morse code detection state machine
     while (1) {
-        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &adc_raw[0][0]));
-        ESP_LOGI(TAG, "ADC%d Channel[%d] Raw Data: %d", ADC_UNIT_1 + 1, EXAMPLE_ADC1_CHAN0, adc_raw[0][0]);
-        if (do_calibration1_chan0) {
-            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan0_handle, adc_raw[0][0], &voltage[0][0]));
-            ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, EXAMPLE_ADC1_CHAN0, voltage[0][0]);
+        // Read ADC from photodiode
+        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, PHOTODIODE_ADC_CHAN, &adc_raw_value));
+
+        int64_t current_time = esp_timer_get_time() / 1000;  // Convert to ms
+
+        // Continuous debug output - show ALL values to diagnose photodiode
+        if (do_calibration) {
+            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, adc_raw_value, &voltage_mv));
+            ESP_LOGI(TAG, "ADC Raw: %4d, Voltage: %4d mV, State: %s",
+                     adc_raw_value, voltage_mv,
+                     (adc_raw_value > LIGHT_THRESHOLD) ? "LIGHT" : "DARK");
+        } else {
+            ESP_LOGI(TAG, "ADC Raw: %4d, State: %s",
+                     adc_raw_value,
+                     (adc_raw_value > LIGHT_THRESHOLD) ? "LIGHT" : "DARK");
         }
-        vTaskDelay(pdMS_TO_TICKS(1000));
 
-        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN1, &adc_raw[0][1]));
-        ESP_LOGI(TAG, "ADC%d Channel[%d] Raw Data: %d", ADC_UNIT_1 + 1, EXAMPLE_ADC1_CHAN1, adc_raw[0][1]);
-        if (do_calibration1_chan1) {
-            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan1_handle, adc_raw[0][1], &voltage[0][1]));
-            ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, EXAMPLE_ADC1_CHAN1, voltage[0][1]);
+        // Morse detection temporarily disabled for photodiode testing
+        /*
+        // Determine current light state (ON or OFF)
+        current_light_state = (adc_raw_value > LIGHT_THRESHOLD);
+
+        // Detect rising edge (light turns ON)
+        if (current_light_state && !previous_light_state) {
+            int64_t gap_duration = current_time - gap_start_time;
+
+            // Check if gap indicates end of letter or word
+            if (gap_duration > WORD_GAP_MS) {
+                process_morse_buffer();
+                printf(" ");  // Print space between words
+                fflush(stdout);
+            } else if (gap_duration > LETTER_GAP_MS) {
+                process_morse_buffer();
+            }
+
+            pulse_start_time = current_time;
         }
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        // Detect falling edge (light turns OFF)
+        else if (!current_light_state && previous_light_state) {
+            int64_t pulse_duration = current_time - pulse_start_time;
 
-#if EXAMPLE_USE_ADC2
-        ESP_ERROR_CHECK(adc_oneshot_read(adc2_handle, EXAMPLE_ADC2_CHAN0, &adc_raw[1][0]));
-        ESP_LOGI(TAG, "ADC%d Channel[%d] Raw Data: %d", ADC_UNIT_2 + 1, EXAMPLE_ADC2_CHAN0, adc_raw[1][0]);
-        if (do_calibration2) {
-            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc2_cali_handle, adc_raw[1][0], &voltage[1][0]));
-            ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_2 + 1, EXAMPLE_ADC2_CHAN0, voltage[1][0]);
+            // Classify pulse as dot or dash
+            if (pulse_duration >= DASH_MIN_MS) {
+                // Dash detected
+                if (buffer_index < sizeof(morse_buffer) - 1) {
+                    morse_buffer[buffer_index++] = '-';
+                    ESP_LOGI(TAG, "DASH (duration: %lld ms)", pulse_duration);
+                }
+            } else if (pulse_duration >= (DOT_DURATION_MS / 2)) {
+                // Dot detected (with some tolerance)
+                if (buffer_index < sizeof(morse_buffer) - 1) {
+                    morse_buffer[buffer_index++] = '.';
+                    ESP_LOGI(TAG, "DOT (duration: %lld ms)", pulse_duration);
+                }
+            }
+
+            gap_start_time = current_time;
         }
-        vTaskDelay(pdMS_TO_TICKS(1000));
-#endif  //#if EXAMPLE_USE_ADC2
-    }
 
-    //Tear Down
-    ESP_ERROR_CHECK(adc_oneshot_del_unit(adc1_handle));
-    if (do_calibration1_chan0) {
-        example_adc_calibration_deinit(adc1_cali_chan0_handle);
+        previous_light_state = current_light_state;
+        */
+        vTaskDelay(pdMS_TO_TICKS(SAMPLE_RATE_MS));  // Sample every 10ms
     }
-    if (do_calibration1_chan1) {
-        example_adc_calibration_deinit(adc1_cali_chan1_handle);
-    }
-
-#if EXAMPLE_USE_ADC2
-    ESP_ERROR_CHECK(adc_oneshot_del_unit(adc2_handle));
-    if (do_calibration2) {
-        example_adc_calibration_deinit(adc2_cali_handle);
-    }
-#endif //#if EXAMPLE_USE_ADC2
 }
 
 /*---------------------------------------------------------------

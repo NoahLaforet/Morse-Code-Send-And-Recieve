@@ -5,7 +5,7 @@ A Python script that sends Morse code messages using an LED on a Raspberry Pi.
 ## Usage
 
 ```bash
-python3 send.py <repetitions> <message>
+sudo python3 send.py <repetitions> <message>
 ```
 
 ### Arguments
