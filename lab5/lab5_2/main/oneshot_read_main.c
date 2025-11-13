@@ -37,7 +37,7 @@ static int voltage_mv;
         Morse Code Configuration
 ---------------------------------------------------------------*/
 #define SAMPLE_RATE_MS      10      // Sample ADC every 10ms
-#define LIGHT_THRESHOLD     1500    // ADC raw value threshold (adjust based on testing)
+#define LIGHT_THRESHOLD     80      // ADC raw value threshold (adjusted for weak photodiode signal)
 
 // Morse timing (in milliseconds) - synced with send.py
 #define DOT_DURATION_MS     200     // Dot duration (matches send.py: 0.2s)
@@ -71,8 +71,13 @@ static bool current_light_state = false;
 static bool previous_light_state = false;
 static int64_t pulse_start_time = 0;
 static int64_t gap_start_time = 0;
+static int64_t last_activity_time = 0;  // Track time of last signal
 static char morse_buffer[10] = {0};  // Store dots/dashes for current letter
 static int buffer_index = 0;
+
+// Output collection
+static char output_message[256] = {0};  // Store decoded message
+static int output_index = 0;
 static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle);
 static void example_adc_calibration_deinit(adc_cali_handle_t handle);
 
@@ -97,11 +102,17 @@ char decode_morse(const char* pattern) {
 void process_morse_buffer(void) {
     if (buffer_index > 0) {
         morse_buffer[buffer_index] = '\0';  // Null terminate
+
         char decoded = decode_morse(morse_buffer);
 
         if (decoded != '\0') {
-            printf("%c", decoded);
-            fflush(stdout);  // Immediately print the character
+            ESP_LOGI(TAG, "  → Decoded: '%s' = '%c'", morse_buffer, decoded);
+            // Add to output message
+            if (output_index < sizeof(output_message) - 1) {
+                output_message[output_index++] = decoded;
+            }
+        } else {
+            ESP_LOGI(TAG, "  → Unknown pattern: '%s'", morse_buffer);
         }
 
         // Clear buffer
@@ -135,16 +146,10 @@ void app_main(void)
 
     // Initialize timing
     gap_start_time = esp_timer_get_time() / 1000;  // Convert to ms
+    last_activity_time = gap_start_time;
 
-    // Debug: print ADC values continuously to help calibrate threshold
-    int64_t start_time = esp_timer_get_time() / 1000;
-
-    ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "=== CONTINUOUS DEBUG MODE ===");
-    ESP_LOGI(TAG, "Shine a flashlight or LED at the photodiode");
-    ESP_LOGI(TAG, "Watch for ADC values to change");
-    ESP_LOGI(TAG, "================================");
-    ESP_LOGI(TAG, "");
+    ESP_LOGI(TAG, "Starting Morse code detection...");
+    ESP_LOGI(TAG, "Send Morse code from Pi now!");
 
     // Main loop - Morse code detection state machine
     while (1) {
@@ -153,20 +158,6 @@ void app_main(void)
 
         int64_t current_time = esp_timer_get_time() / 1000;  // Convert to ms
 
-        // Continuous debug output - show ALL values to diagnose photodiode
-        if (do_calibration) {
-            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, adc_raw_value, &voltage_mv));
-            ESP_LOGI(TAG, "ADC Raw: %4d, Voltage: %4d mV, State: %s",
-                     adc_raw_value, voltage_mv,
-                     (adc_raw_value > LIGHT_THRESHOLD) ? "LIGHT" : "DARK");
-        } else {
-            ESP_LOGI(TAG, "ADC Raw: %4d, State: %s",
-                     adc_raw_value,
-                     (adc_raw_value > LIGHT_THRESHOLD) ? "LIGHT" : "DARK");
-        }
-
-        // Morse detection temporarily disabled for photodiode testing
-        /*
         // Determine current light state (ON or OFF)
         current_light_state = (adc_raw_value > LIGHT_THRESHOLD);
 
@@ -175,15 +166,20 @@ void app_main(void)
             int64_t gap_duration = current_time - gap_start_time;
 
             // Check if gap indicates end of letter or word
-            if (gap_duration > WORD_GAP_MS) {
+            if (gap_duration >= WORD_GAP_MS) {
+                ESP_LOGI(TAG, "Word gap detected (%lld ms)", gap_duration);
                 process_morse_buffer();
-                printf(" ");  // Print space between words
-                fflush(stdout);
-            } else if (gap_duration > LETTER_GAP_MS) {
+                // Add space to output
+                if (output_index < sizeof(output_message) - 1) {
+                    output_message[output_index++] = ' ';
+                }
+            } else if (gap_duration >= LETTER_GAP_MS) {
+                ESP_LOGI(TAG, "Letter gap detected (%lld ms)", gap_duration);
                 process_morse_buffer();
             }
 
             pulse_start_time = current_time;
+            last_activity_time = current_time;
         }
         // Detect falling edge (light turns OFF)
         else if (!current_light_state && previous_light_state) {
@@ -194,21 +190,53 @@ void app_main(void)
                 // Dash detected
                 if (buffer_index < sizeof(morse_buffer) - 1) {
                     morse_buffer[buffer_index++] = '-';
-                    ESP_LOGI(TAG, "DASH (duration: %lld ms)", pulse_duration);
+                    ESP_LOGI(TAG, "Dash detected (%lld ms)", pulse_duration);
                 }
             } else if (pulse_duration >= (DOT_DURATION_MS / 2)) {
                 // Dot detected (with some tolerance)
                 if (buffer_index < sizeof(morse_buffer) - 1) {
                     morse_buffer[buffer_index++] = '.';
-                    ESP_LOGI(TAG, "DOT (duration: %lld ms)", pulse_duration);
+                    ESP_LOGI(TAG, "Dot detected (%lld ms)", pulse_duration);
                 }
             }
 
             gap_start_time = current_time;
+            last_activity_time = current_time;
+        }
+
+        // Timeout: if no activity for LETTER_GAP_MS and buffer has data, decode it
+        if (!current_light_state && buffer_index > 0) {
+            int64_t idle_time = current_time - last_activity_time;
+            if (idle_time > LETTER_GAP_MS) {
+                process_morse_buffer();
+                last_activity_time = current_time;  // Reset after processing
+            }
+        }
+
+        // Print complete output if idle for very long (end of message)
+        static int64_t last_print_time = 0;
+        if (!current_light_state && (current_time - last_activity_time) > WORD_GAP_MS * 2) {
+            if (current_time - last_print_time > WORD_GAP_MS * 2 && output_index > 0) {
+                // Null terminate and print final output
+                output_message[output_index] = '\0';
+
+                ESP_LOGI(TAG, "");
+                ESP_LOGI(TAG, "================================");
+                ESP_LOGI(TAG, "   Transmission Complete!");
+                ESP_LOGI(TAG, "================================");
+                ESP_LOGI(TAG, "Output: %s", output_message);
+                ESP_LOGI(TAG, "================================");
+                ESP_LOGI(TAG, "");
+
+                // Reset output buffer for next message
+                memset(output_message, 0, sizeof(output_message));
+                output_index = 0;
+
+                last_print_time = current_time;
+            }
         }
 
         previous_light_state = current_light_state;
-        */
         vTaskDelay(pdMS_TO_TICKS(SAMPLE_RATE_MS));  // Sample every 10ms
     }
 }
