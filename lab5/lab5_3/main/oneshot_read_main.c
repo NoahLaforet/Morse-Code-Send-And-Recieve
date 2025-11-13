@@ -34,17 +34,17 @@ static int adc_raw_value;
 static int voltage_mv;
 
 /*---------------------------------------------------------------
-        Morse Code Configuration - 2x faster than lab5_2
+        Morse Code Configuration - 10x faster for 10 chars/sec
 ---------------------------------------------------------------*/
-#define SAMPLE_RATE_MS      5       // Sample ADC every 5ms (conservative for stability)
+#define SAMPLE_RATE_MS      1       // Sample ADC every 1ms (fast for 10ms dot duration)
 #define LIGHT_THRESHOLD     80      // ADC raw value threshold (adjusted for weak photodiode signal)
 
-// Morse timing (in milliseconds) - synced with send.py (DOT=100ms, 2x faster than lab5_2)
-#define DOT_DURATION_MS     100     // Dot duration (matches send.py: 0.1s)
-#define DASH_MIN_MS         200     // Minimum duration for dash (2x dot, send.py uses 3x=300ms)
-#define SYMBOL_GAP_MS       100     // Gap between dots/dashes (matches send.py)
-#define LETTER_GAP_MS       300     // Gap between letters (matches send.py: 3*DOT)
-#define WORD_GAP_MS         700     // Gap between words (matches send.py: 7*DOT)
+// Morse timing (in milliseconds) - synced with send.py (DOT=10ms, 10x faster than lab5_2)
+#define DOT_DURATION_MS     10      // Dot duration (matches send.py: 0.01s)
+#define DASH_MIN_MS         20      // Minimum duration for dash (2x dot, send.py uses 3x=30ms)
+#define SYMBOL_GAP_MS       10      // Gap between dots/dashes (matches send.py)
+#define LETTER_GAP_MS       30      // Gap between letters (matches send.py: 3*DOT)
+#define WORD_GAP_MS         70      // Gap between words (matches send.py: 7*DOT)
 
 // Morse code lookup table
 typedef struct {
@@ -141,7 +141,7 @@ void app_main(void)
     adc_cali_handle_t adc1_cali_handle = NULL;
     bool do_calibration = example_adc_calibration_init(ADC_UNIT_1, PHOTODIODE_ADC_CHAN, EXAMPLE_ADC_ATTEN, &adc1_cali_handle);
 
-    ESP_LOGI(TAG, "Morse Code Receiver Ready - 2x faster than lab5_2");
+    ESP_LOGI(TAG, "Morse Code Receiver Ready - 10x faster for 10 chars/sec");
     ESP_LOGI(TAG, "Waiting for signal on GPIO2...");
     ESP_LOGI(TAG, "Light threshold: %d (raw ADC value)", LIGHT_THRESHOLD);
 
@@ -238,7 +238,19 @@ void app_main(void)
         }
 
         previous_light_state = current_light_state;
-        vTaskDelay(pdMS_TO_TICKS(SAMPLE_RATE_MS));  // Sample every 10ms
+
+        // Ensure we delay at least 1 tick to feed the watchdog
+        int delay_ticks = pdMS_TO_TICKS(SAMPLE_RATE_MS);
+        if (delay_ticks == 0) {
+            delay_ticks = 1;
+        }
+        vTaskDelay(delay_ticks);
+    }
+
+    //Tear Down
+    ESP_ERROR_CHECK(adc_oneshot_del_unit(adc1_handle));
+    if (do_calibration) {
+        example_adc_calibration_deinit(adc1_cali_handle);
     }
 }
 
