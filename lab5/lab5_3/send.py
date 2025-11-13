@@ -7,8 +7,8 @@ import sys
 # LED Configuration
 LED_PIN = 17  # GPIO pin number 
 
-# Morse code timing (in seconds)
-DOT = 0.2              # Duration of a dot
+# Morse code timing (in seconds) - 2x faster than lab5_2
+DOT = 0.1              # Duration of a dot (100ms - 2x faster than lab5_2's 200ms)
 DASH = DOT * 3         # Duration of a dash (3 dots)
 SYMBOL_SPACE = DOT     # Space between dots and dashes within a character
 LETTER_SPACE = DOT * 3 # Space between letters
