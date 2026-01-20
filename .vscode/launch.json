@@ -6,8 +6,8 @@
       "type": "lldb",
       "request": "launch",
       "args": [],
-      "cwd": "/Users/noahl/esp/Morse-Code-Send-And-Recieve/lab5/lab5_1",
-      "program": "/Users/noahl/esp/Morse-Code-Send-And-Recieve/lab5/lab5_1/build/Debug/outDebug"
+      "cwd": "/Users/noahl/esp/lab5/lab5_1",
+      "program": "/Users/noahl/esp/lab5/lab5_1/build/Debug/outDebug"
     }
   ]
 }
