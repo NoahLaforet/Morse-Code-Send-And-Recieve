@@ -1,7 +1,7 @@
 # Morse Code Transceiver System
 **Author: Noah Laforet**
 
-A bidirectional Morse code communication system featuring optical transmission between a Raspberry Pi and ESP32-C3 microcontroller. This project demonstrates embedded systems programming, real-time signal processing, and precise timing control.
+A Morse code communication system featuring optical transmission between a Raspberry Pi and ESP32-C3 microcontroller. This project demonstrates embedded systems programming, real-time signal processing, and precise timing control.
 
 ## Project Overview
 
@@ -9,48 +9,13 @@ This system enables wireless optical communication by encoding text messages int
 
 ### Key Features
 
-- **Bidirectional Communication**: Raspberry Pi transmits, ESP32-C3 receives and decodes
+- **Optical Communication**: Raspberry Pi transmits, ESP32-C3 receives and decodes
 - **Dual Speed Modes**:
   - Standard Mode: 200ms dot duration
   - Fast Mode: 10ms dot duration (10 characters/second)
 - **Real-Time Decoding**: State machine-based signal processing
 - **High-Precision Timing**: Microsecond-level timing control using ESP32 hardware timers
 - **Analog Signal Processing**: ADC-based photodiode reading with calibration
-
-## Technical Skills Demonstrated
-
-### Embedded Systems Programming
-- **C Programming**: Low-level embedded C for ESP32-C3 firmware
-- **Python**: GPIO control and timing for Raspberry Pi transmitter
-- **FreeRTOS**: Real-time operating system task management
-- **ESP-IDF Framework**: ESP32 development with industry-standard tooling
-
-### Hardware Interfacing
-- **GPIO Control**: Digital I/O for LED transmission on Raspberry Pi
-- **ADC (Analog-to-Digital Conversion)**: 12-bit ADC reading for photodiode signal detection
-- **ADC Calibration**: eFuse-based calibration for accurate voltage measurements
-- **Photodiode Sensor Integration**: Optical signal reception and amplification
-
-### Real-Time Signal Processing
-- **State Machine Design**: Edge detection and timing-based decoding
-- **Precise Timing Control**:
-  - ESP32 high-resolution timer (`esp_timer`) with microsecond accuracy
-  - FreeRTOS `vTaskDelay()` for controlled sampling rates
-  - Raspberry Pi GPIO timing with Python `time.sleep()`
-- **Signal Debouncing**: Threshold-based noise filtering
-- **Pattern Recognition**: Morse code lookup table implementation
-
-### Performance Optimization
-- **Clock Cycle Management**: Optimized sampling rates (1ms and 10ms)
-- **Watchdog Timer Handling**: Proper FreeRTOS task yielding to prevent system resets
-- **Memory Management**: Efficient buffer handling for real-time decoding
-- **Timing Optimization**: 10x speed increase from standard to fast mode
-
-### System Integration
-- **Cross-Platform Communication**: Raspberry Pi ↔ ESP32-C3 optical link
-- **Protocol Design**: Synchronized timing parameters between transmitter and receiver
-- **Build System**: CMake-based ESP-IDF project configuration
-- **Version Control**: Git-based project management
 
 ## Hardware Requirements
 
@@ -59,7 +24,8 @@ This system enables wireless optical communication by encoding text messages int
 - LED (connected to GPIO pin 17)
 - Current-limiting resistor (220-330Ω)
 - Power supply
- ![alt text](photos/IMG_7494.JPG)
+
+<img src="photos/IMG_7494.JPG" alt="Raspberry Pi transmitter setup" width="400">
 
 
 ### Receiver (ESP32-C3)
@@ -67,7 +33,9 @@ This system enables wireless optical communication by encoding text messages int
 - Photodiode sensor module
 - USB cable for programming and power
 
-![alt text](photos/IMG_7492.JPG) ![alt text](photos/IMG_7493.JPG)
+<img src="photos/IMG_7492.JPG" alt="ESP32-C3 receiver setup" width="400">
+
+<img src="photos/IMG_7493.JPG" alt="ESP32-C3 receiver circuit" width="400">
 
 
 ## Software Setup
@@ -236,7 +204,7 @@ The receiver implements a timing-based state machine:
 ### Receiver Not Detecting Signal
 - Check photodiode alignment with LED
 - Verify GPIO2 connection to photodiode signal pin
-- Adjust `LIGHT_THRESHOLD` in source code if ambient light interferes; Covering circuit will help improve accuracy
+- Adjust `LIGHT_THRESHOLD` in source code if ambient light interferes. Covering circuit will help improve accuracy
 - Ensure transmitter and receiver are using matching speed modes
 
 ### Incorrect Decoding
@@ -248,6 +216,41 @@ The receiver implements a timing-based state machine:
 ### Watchdog Timer Resets (Fast Mode)
 - Increase `SAMPLE_RATE_MS` in receiver code
 - Ensure `vTaskDelay()` is called with at least 1 tick
+
+## Technical Skills Demonstrated
+
+### Embedded Systems Programming
+- **C Programming**: Low-level embedded C for ESP32-C3 firmware
+- **Python**: GPIO control and timing for Raspberry Pi transmitter
+- **FreeRTOS**: Real-time operating system task management
+- **ESP-IDF Framework**: ESP32 development with industry-standard tooling
+
+### Hardware Interfacing
+- **GPIO Control**: Digital I/O for LED transmission on Raspberry Pi
+- **ADC (Analog-to-Digital Conversion)**: 12-bit ADC reading for photodiode signal detection
+- **ADC Calibration**: eFuse-based calibration for accurate voltage measurements
+- **Photodiode Sensor Integration**: Optical signal reception and amplification
+
+### Real-Time Signal Processing
+- **State Machine Design**: Edge detection and timing-based decoding
+- **Precise Timing Control**:
+  - ESP32 high-resolution timer (`esp_timer`) with microsecond accuracy
+  - FreeRTOS `vTaskDelay()` for controlled sampling rates
+  - Raspberry Pi GPIO timing with Python `time.sleep()`
+- **Signal Debouncing**: Threshold-based noise filtering
+- **Pattern Recognition**: Morse code lookup table implementation
+
+### Performance Optimization
+- **Clock Cycle Management**: Optimized sampling rates (1ms and 10ms)
+- **Watchdog Timer Handling**: Proper FreeRTOS task yielding to prevent system resets
+- **Memory Management**: Efficient buffer handling for real-time decoding
+- **Timing Optimization**: 20x speed increase from standard to fast mode
+
+### System Integration
+- **Cross-Platform Communication**: Raspberry Pi ↔ ESP32-C3 optical link
+- **Protocol Design**: Synchronized timing parameters between transmitter and receiver
+- **Build System**: CMake-based ESP-IDF project configuration
+- **Version Control**: Git-based project management
 
 ## Future Enhancements
 
