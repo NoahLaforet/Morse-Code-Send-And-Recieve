@@ -59,15 +59,15 @@ This system enables wireless optical communication by encoding text messages int
 - LED (connected to GPIO pin 17)
 - Current-limiting resistor (220-330Ω)
 - Power supply
- 
-![alt text](../photos/IMG_7494.JPG)
+ ![alt text](photos/IMG_7494.JPG)
+
 
 ### Receiver (ESP32-C3)
 - ESP32-C3 development board (or UNO32 with ESP32-C3)
 - Photodiode sensor module
 - USB cable for programming and power
 
-![alt text](../photos/IMG_7492.JPG) ![alt text](../photos/IMG_7493.JPG)
+![alt text](photos/IMG_7492.JPG) ![alt text](photos/IMG_7493.JPG)
 
 
 ## Software Setup
